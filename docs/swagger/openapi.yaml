@@ -1,0 +1,306 @@
+openapi: 3.0.3
+info:
+  title: IO Neobanco Card Issuance API
+  version: 1.0.0
+  description: API de emision de tarjetas VISA basada en eventos.
+servers:
+  - url: http://localhost:3000
+paths:
+  /v1/cards/issue:
+    post:
+      summary: Solicitar emision de tarjeta
+      parameters:
+        - in: header
+          name: x-idempotency-key
+          required: true
+          schema:
+            type: string
+          description: Clave de idempotencia manejada por el servicio usando Redis NX.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IssueCardRequest'
+      responses:
+        '202':
+          description: Solicitud aceptada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueCardAcceptedResponse'
+        '409':
+          description: Cliente con solicitud activa
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConflictErrorResponse'
+        '422':
+          description: Validacion de dominio fallida
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationErrorResponse'
+        '429':
+          description: Rate limit excedido
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RateLimitErrorResponse'
+  /v1/cards/{requestId}/status:
+    get:
+      summary: Consultar estado de solicitud
+      parameters:
+        - in: path
+          name: requestId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Estado encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardStatusResponse'
+        '404':
+          description: No encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotFoundErrorResponse'
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Servicio saludable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthOkResponse'
+        '503':
+          description: Dependencia caida
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthFailResponse'
+  /metrics:
+    get:
+      summary: Metrics Prometheus
+      responses:
+        '200':
+          description: Metrics text exposition format
+components:
+  schemas:
+    IssueCardRequest:
+      type: object
+      required: [customer, product, forceError]
+      properties:
+        customer:
+          type: object
+          required: [documentType, documentNumber, fullName, birthDate, email]
+          properties:
+            documentType:
+              type: string
+              enum: [DNI]
+            documentNumber:
+              type: string
+              pattern: '^\\d{8}$'
+              example: "73545678"
+            fullName:
+              type: string
+              example: "Juan Perez"
+            birthDate:
+              type: string
+              example: 02/03/2004
+            email:
+              type: string
+              format: email
+        product:
+          type: object
+          required: [type, currency]
+          properties:
+            type:
+              type: string
+              enum: [VISA]
+            currency:
+              type: string
+              enum: [PEN, USD]
+        forceError:
+          type: boolean
+
+    IssueCardAcceptedResponse:
+      type: object
+      required: [requestId, status, message, createdAt]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pendiente]
+        message:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    ConflictErrorResponse:
+      type: object
+      required: [statusCode, error, code, message]
+      properties:
+        statusCode:
+          type: integer
+          example: 409
+        error:
+          type: string
+          example: Conflict
+        code:
+          type: string
+          example: CUSTOMER_ALREADY_HAS_CARD
+        message:
+          type: string
+        existingRequestId:
+          type: string
+          format: uuid
+
+    ValidationErrorResponse:
+      type: object
+      required: [statusCode, error, message]
+      properties:
+        statusCode:
+          type: integer
+          example: 422
+        error:
+          type: string
+          example: Unprocessable Entity
+        message:
+          type: string
+
+    RateLimitErrorResponse:
+      type: object
+      required: [statusCode, error, message]
+      properties:
+        statusCode:
+          type: integer
+          example: 429
+        error:
+          type: string
+          example: Too Many Requests
+        message:
+          type: string
+        retryAfter:
+          type: integer
+
+    CardStatusResponse:
+      type: object
+      required: [requestId, status, attempts, customer, product, createdAt, updatedAt]
+      properties:
+        requestId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pendiente, en_proceso, emitido, fallido]
+        attempts:
+          type: integer
+        failureReason:
+          type: string
+          nullable: true
+        card:
+          type: object
+          nullable: true
+          properties:
+            id:
+              type: string
+            maskedNumber:
+              type: string
+            expiryDate:
+              type: string
+            issuedAt:
+              type: string
+              format: date-time
+        customer:
+          type: object
+          required: [documentNumber, fullName]
+          properties:
+            documentNumber:
+              type: string
+            fullName:
+              type: string
+        product:
+          type: object
+          required: [type, currency]
+          properties:
+            type:
+              type: string
+            currency:
+              type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    NotFoundErrorResponse:
+      type: object
+      required: [statusCode, error, message]
+      properties:
+        statusCode:
+          type: integer
+          example: 404
+        error:
+          type: string
+          example: Not Found
+        message:
+          type: string
+
+    HealthOkResponse:
+      type: object
+      required: [status, uptime, checks]
+      properties:
+        status:
+          type: string
+          example: ok
+        uptime:
+          type: number
+        checks:
+          type: object
+          required: [db, kafka, redis]
+          properties:
+            db:
+              type: string
+              example: ok
+            kafka:
+              type: string
+              example: ok
+            redis:
+              type: string
+              example: ok
+
+    HealthFailResponse:
+      type: object
+      required: [status, uptime, checks]
+      properties:
+        status:
+          type: string
+          example: fail
+        uptime:
+          type: number
+        checks:
+          type: object
+          required: [db, kafka, redis]
+          properties:
+            db:
+              type: string
+              example: fail
+            kafka:
+              type: string
+              example: ok
+            redis:
+              type: string
+              example: ok
+
